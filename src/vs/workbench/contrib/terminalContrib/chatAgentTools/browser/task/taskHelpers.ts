@@ -22,27 +22,32 @@ export function getTaskDefinition(id: string) {
 
 }
 
-export function getTaskRepresentation(task: IConfiguredTask): string {
-	if (task.label) {
+export function getTaskRepresentation(task: IConfiguredTask | Task): string {
+	if ('label' in task && task.label) {
 		return task.label;
-	} else if (task.script) {
+	} else if ('script' in task && task.script) {
 		return task.script;
-	} else if (task.command) {
-		return task.command;
+	} else if ('command' in task && task.command) {
+		return typeof task.command === 'string' ? task.command : task.command.name?.toString() || '';
 	}
 	return '';
 }
 
-export async function getTaskForTool(id: string, taskDefinition: { taskLabel?: string; taskType?: string }, workspaceFolder: string, configurationService: IConfigurationService, taskService: ITaskService): Promise<Task | undefined> {
+export async function getTaskForTool(id: string | undefined, taskDefinition: { taskLabel?: string; taskType?: string }, workspaceFolder: string, configurationService: IConfigurationService, taskService: ITaskService): Promise<Task | undefined> {
 	let index = 0;
 	let task: IConfiguredTask | undefined;
 	const configTasks: IConfiguredTask[] = (configurationService.getValue('tasks') as { tasks: IConfiguredTask[] }).tasks ?? [];
 	for (const configTask of configTasks) {
+		if (!configTask.type || 'hide' in configTask && configTask.hide) {
+			// Skip these as they are not included in the agent prompt and we need to align with
+			// the indices used there.
+			continue;
+		}
 		if ((configTask.type && taskDefinition.taskType ? configTask.type === taskDefinition.taskType : true) &&
 			((getTaskRepresentation(configTask) === taskDefinition?.taskLabel) || (id === configTask.label))) {
 			task = configTask;
 			break;
-		} else if (id === `${configTask.type}: ${index}`) {
+		} else if (!configTask.label && id === `${configTask.type}: ${index}`) {
 			task = configTask;
 			break;
 		}
@@ -53,7 +58,7 @@ export async function getTaskForTool(id: string, taskDefinition: { taskLabel?: s
 	}
 	const configuringTasks: IStringDictionary<ConfiguringTask> | undefined = (await taskService.getWorkspaceTasks())?.get(URI.file(workspaceFolder).toString())?.configurations?.byIdentifier;
 	const configuredTask: ConfiguringTask | undefined = Object.values(configuringTasks ?? {}).find(t => {
-		return t.type === task.type && (t._label === task.label || t._label === `${task.type}: ${getTaskRepresentation(task)}`);
+		return t.type === task.type && (t._label === task.label || t._label === `${task.type}: ${getTaskRepresentation(task)}` || t._label === getTaskRepresentation(task));
 	});
 	let resolvedTask: Task | undefined;
 	if (configuredTask) {
@@ -80,9 +85,13 @@ export async function getTaskForTool(id: string, taskDefinition: { taskLabel?: s
  * - `command`: (optional) A command associated with the task, if applicable.
  *
  */
-interface IConfiguredTask {
+export interface IConfiguredTask {
 	label?: string;
 	type?: string;
 	script?: string;
 	command?: string;
+	args?: string[];
+	isBackground?: boolean;
+	problemMatcher?: string[];
+	group?: string;
 }
