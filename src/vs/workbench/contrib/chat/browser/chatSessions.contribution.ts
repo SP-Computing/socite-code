@@ -6,18 +6,16 @@
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable } from '../../../../base/common/lifecycle.js';
+import { MarkdownString } from '../../../../base/common/htmlContent.js';
 import { localize } from '../../../../nls.js';
 import { ContextKeyExpr, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { Registry } from '../../../../platform/registry/common/platform.js';
-import { IWorkbenchContribution, IWorkbenchContributionsRegistry, Extensions as WorkbenchExtensions } from '../../../common/contributions.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IExtensionService, isProposedApiEnabled } from '../../../services/extensions/common/extensions.js';
 import { ExtensionsRegistry } from '../../../services/extensions/common/extensionsRegistry.js';
-import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { IChatWidgetService } from '../browser/chat.js';
 import { ChatEditorInput } from '../browser/chatEditorInput.js';
 import { IChatAgentData, IChatAgentImplementation, IChatAgentRequest, IChatAgentResult, IChatAgentService } from '../common/chatAgents.js';
@@ -25,6 +23,8 @@ import { IChatProgress, IChatService } from '../common/chatService.js';
 import { ChatSession, IChatSessionContentProvider, IChatSessionItem, IChatSessionItemProvider, IChatSessionsExtensionPoint, IChatSessionsService } from '../common/chatSessionsService.js';
 import { ChatSessionUri } from '../common/chatUri.js';
 import { ChatAgentLocation, ChatModeKind } from '../common/constants.js';
+
+const CODING_AGENT_DOCS = 'https://code.visualstudio.com/docs/copilot/copilot-coding-agent';
 
 const extensionPoint = ExtensionsRegistry.registerExtensionPoint<IChatSessionsExtensionPoint[]>({
 	extensionPoint: 'chatSessions',
@@ -65,54 +65,23 @@ const extensionPoint = ExtensionsRegistry.registerExtensionPoint<IChatSessionsEx
 	}
 });
 
-export class ChatSessionsContribution extends Disposable implements IWorkbenchContribution {
-	constructor(
-		@ILogService private readonly logService: ILogService,
-		@IChatSessionsService private readonly chatSessionsService: IChatSessionsService,
-	) {
-		super();
-
-		extensionPoint.setHandler(extensions => {
-			for (const ext of extensions) {
-				if (!isProposedApiEnabled(ext.description, 'chatSessionsProvider')) {
-					continue;
-				}
-				if (!Array.isArray(ext.value)) {
-					continue;
-				}
-				for (const contribution of ext.value) {
-					const c: IChatSessionsExtensionPoint = {
-						id: contribution.id,
-						type: contribution.type,
-						name: contribution.name,
-						displayName: contribution.displayName,
-						description: contribution.description,
-						when: contribution.when,
-						extensionDescription: ext.description,
-					};
-					this.logService.info(`Registering chat session from extension contribution: ${c.displayName} (id='${c.type}' name='${c.name}')`);
-					this._register(this.chatSessionsService.registerContribution(c)); // TODO: Is it for contribution to own this? I think not
-				}
-			}
-		});
-	}
-}
-
-const workbenchRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
-workbenchRegistry.registerWorkbenchContribution(ChatSessionsContribution, LifecyclePhase.Restored);
-
 class ContributedChatSessionData implements IDisposable {
+	private readonly _disposableStore: DisposableStore;
+
 	constructor(
 		readonly session: ChatSession,
 		readonly chatSessionType: string,
 		readonly id: string,
 		private readonly onWillDispose: (session: ChatSession, chatSessionType: string, id: string) => void
 	) {
+		this._disposableStore = new DisposableStore();
+		this._disposableStore.add(this.session.onWillDispose(() => {
+			this.onWillDispose(this.session, this.chatSessionType, this.id);
+		}));
 	}
 
 	dispose(): void {
-		this.onWillDispose(this.session, this.chatSessionType, this.id);
-		this.session.dispose();
+		this._disposableStore.dispose();
 	}
 }
 
@@ -140,13 +109,37 @@ export class ChatSessionsService extends Disposable implements IChatSessionsServ
 		@IContextKeyService private readonly _contextKeyService: IContextKeyService,
 	) {
 		super();
+		this._register(extensionPoint.setHandler(extensions => {
+			for (const ext of extensions) {
+				if (!isProposedApiEnabled(ext.description, 'chatSessionsProvider')) {
+					continue;
+				}
+				if (!Array.isArray(ext.value)) {
+					continue;
+				}
+				for (const contribution of ext.value) {
+					const c: IChatSessionsExtensionPoint = {
+						id: contribution.id,
+						type: contribution.type,
+						name: contribution.name,
+						displayName: contribution.displayName,
+						description: contribution.description,
+						when: contribution.when,
+						extensionDescription: ext.description,
+					};
+					this._logService.info(`Registering chat session from extension contribution: ${c.displayName} (id='${c.type}' name='${c.name}')`);
+					this._register(this.registerContribution(c));
+				}
+			}
+		}));
 
 		// Listen for context changes and re-evaluate contributions
 		this._register(Event.filter(this._contextKeyService.onDidChangeContext, e => e.affectsSome(this._contextKeys))(() => {
 			this._evaluateAvailability();
 		}));
 	}
-	public registerContribution(contribution: IChatSessionsExtensionPoint): IDisposable {
+
+	private registerContribution(contribution: IChatSessionsExtensionPoint): IDisposable {
 		if (this._contributions.has(contribution.type)) {
 			this._logService.warn(`Chat session contribution with id '${contribution.type}' is already registered.`);
 			return { dispose: () => { } };
@@ -270,7 +263,7 @@ export class ChatSessionsService extends Disposable implements IChatSessionsServ
 			isDynamic: true,
 			isCodingAgent: true, // TODO: Influences chat UI (eg: locks chat to participant, hides UX elements, etc...)
 			slashCommands: [],
-			locations: [ChatAgentLocation.Panel], // TODO: This doesn't appear to be respected
+			locations: [ChatAgentLocation.Panel],
 			modes: [ChatModeKind.Agent, ChatModeKind.Ask], // TODO: These are no longer respected
 			disambiguation: [],
 			metadata: {
@@ -287,13 +280,13 @@ export class ChatSessionsService extends Disposable implements IChatSessionsServ
 		return disposable;
 	}
 
-	getChatSessionContributions(): IChatSessionsExtensionPoint[] {
+	getAllChatSessionContributions(): IChatSessionsExtensionPoint[] {
 		return Array.from(this._contributions.values()).filter(contribution =>
 			this._isContributionAvailable(contribution)
 		);
 	}
 
-	getChatSessionItemProviders(): IChatSessionItemProvider[] {
+	getAllChatSessionItemProviders(): IChatSessionItemProvider[] {
 		return [...this._itemsProviders.values()].filter(provider => {
 			// Check if the provider's corresponding contribution is available
 			const contribution = this._contributions.get(provider.chatSessionType);
@@ -302,7 +295,7 @@ export class ChatSessionsService extends Disposable implements IChatSessionsServ
 	}
 
 	async canResolveItemProvider(chatViewType: string) {
-		// First check if the contribution is available based on its when clause
+		await this._extensionService.whenInstalledExtensionsRegistered();
 		const contribution = this._contributions.get(chatViewType);
 		if (contribution && !this._isContributionAvailable(contribution)) {
 			return false;
@@ -312,18 +305,13 @@ export class ChatSessionsService extends Disposable implements IChatSessionsServ
 			return true;
 		}
 
-		await this._extensionService.whenInstalledExtensionsRegistered();
 		await this._extensionService.activateByEvent(`onChatSession:${chatViewType}`);
 
 		return this._itemsProviders.has(chatViewType);
 	}
 
-	public notifySessionItemsChange(chatSessionType: string): void {
-		this._onDidChangeSessionItems.fire(chatSessionType);
-	}
-
 	async canResolveContentProvider(chatViewType: string) {
-		// First check if the contribution is available based on its when clause
+		await this._extensionService.whenInstalledExtensionsRegistered();
 		const contribution = this._contributions.get(chatViewType);
 		if (contribution && !this._isContributionAvailable(contribution)) {
 			return false;
@@ -333,7 +321,6 @@ export class ChatSessionsService extends Disposable implements IChatSessionsServ
 			return true;
 		}
 
-		await this._extensionService.whenInstalledExtensionsRegistered();
 		await this._extensionService.activateByEvent(`onChatSession:${chatViewType}`);
 
 		return this._contentProviders.has(chatViewType);
@@ -359,8 +346,15 @@ export class ChatSessionsService extends Disposable implements IChatSessionsServ
 		this._itemsProviders.set(chatSessionType, provider);
 		this._onDidChangeItemsProviders.fire(provider);
 
+		const disposables = new DisposableStore();
+		disposables.add(provider.onDidChangeChatSessionItems(() => {
+			this._onDidChangeSessionItems.fire(chatSessionType);
+		}));
+
 		return {
 			dispose: () => {
+				disposables.dispose();
+
 				const provider = this._itemsProviders.get(chatSessionType);
 				if (provider) {
 					this._itemsProviders.delete(chatSessionType);
@@ -370,15 +364,15 @@ export class ChatSessionsService extends Disposable implements IChatSessionsServ
 		};
 	}
 
-	registerChatSessionContentProvider(provider: IChatSessionContentProvider): IDisposable {
-		this._contentProviders.set(provider.chatSessionType, provider);
+	registerChatSessionContentProvider(chatSessionType: string, provider: IChatSessionContentProvider): IDisposable {
+		this._contentProviders.set(chatSessionType, provider);
 		return {
 			dispose: () => {
-				this._contentProviders.delete(provider.chatSessionType);
+				this._contentProviders.delete(chatSessionType);
 
 				// Remove all sessions that were created by this provider
 				for (const [key, session] of this._sessions) {
-					if (session.chatSessionType === provider.chatSessionType) {
+					if (session.chatSessionType === chatSessionType) {
 						session.dispose();
 						this._sessions.delete(key);
 					}
@@ -411,13 +405,11 @@ export class ChatSessionsService extends Disposable implements IChatSessionsServ
 		this._sessions.set(sessionKey, sessionData);
 
 		return session;
-	} private _onWillDisposeSession(session: ChatSession, chatSessionType: string, id: string): void {
-		const sessionKey = `${chatSessionType}_${id}`;
-		this._sessions.delete(sessionKey);
 	}
 
-	public get hasChatSessionItemProviders(): boolean {
-		return this._itemsProviders.size > 0;
+	private _onWillDisposeSession(session: ChatSession, chatSessionType: string, id: string): void {
+		const sessionKey = `${chatSessionType}_${id}`;
+		this._sessions.delete(sessionKey);
 	}
 }
 
@@ -475,6 +467,17 @@ class CodingAgentChatImplementation extends Disposable implements IChatAgentImpl
 
 		if (chatSession?.requestHandler) {
 			await chatSession.requestHandler(request, progress, [], token);
+		} else {
+			// TODO(jospicer): Temporary while we work on API for dynamic agent to trigger a session
+			const content = new MarkdownString(
+				localize('chatSessionNotFound', "Use `#copilotCodingAgent` to begin a new [coding agent session]({0}).", CODING_AGENT_DOCS),
+			);
+			progress(
+				[{
+					kind: 'markdownContent',
+					content,
+				}]
+			);
 		}
 
 		return {};

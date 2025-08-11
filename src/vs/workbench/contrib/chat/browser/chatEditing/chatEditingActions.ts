@@ -429,7 +429,7 @@ registerAction2(class RestoreCheckpointAction extends Action2 {
 	constructor() {
 		super({
 			id: 'workbench.action.chat.restoreCheckpoint',
-			title: localize2('chat.restoreCheckpoint.label', "Restore checkpoint"),
+			title: localize2('chat.restoreCheckpoint.label', "Restore Checkpoint"),
 			tooltip: localize2('chat.restoreCheckpoint.tooltip', "Restores workspace and chat to this point"),
 			f1: false,
 			category: CHAT_CATEGORY,
@@ -478,7 +478,7 @@ registerAction2(class RestoreLastCheckpoint extends Action2 {
 	constructor() {
 		super({
 			id: 'workbench.action.chat.restoreLastCheckpoint',
-			title: localize2('chat.restoreLastCheckpoint.label', "Restore to last checkpoint"),
+			title: localize2('chat.restoreLastCheckpoint.label', "Restore to Last Checkpoint"),
 			f1: false,
 			category: CHAT_CATEGORY,
 			icon: Codicon.discard,
