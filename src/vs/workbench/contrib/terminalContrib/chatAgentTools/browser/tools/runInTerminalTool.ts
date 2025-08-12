@@ -22,7 +22,8 @@ import { ITerminalLogService } from '../../../../../../platform/terminal/common/
 import { IWorkspaceContextService } from '../../../../../../platform/workspace/common/workspace.js';
 import { IRemoteAgentService } from '../../../../../services/remote/common/remoteAgentService.js';
 import { IChatService, type IChatTerminalToolInvocationData } from '../../../../chat/common/chatService.js';
-import { CountTokensCallback, ILanguageModelToolsService, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress, type IToolConfirmationAction, type IToolConfirmationMessages } from '../../../../chat/common/languageModelToolsService.js';
+import { CountTokensCallback, ILanguageModelToolsService, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress, type IToolConfirmationMessages, type ToolConfirmationAction } from '../../../../chat/common/languageModelToolsService.js';
+import { Separator } from '../../../../../../base/common/actions.js';
 import { ITerminalService, type ITerminalInstance } from '../../../../terminal/browser/terminal.js';
 import type { XtermTerminal } from '../../../../terminal/browser/xterm/xtermTerminal.js';
 import { ITerminalProfileResolverService } from '../../../../terminal/common/terminal.js';
@@ -323,9 +324,9 @@ export class RunInTerminalTool extends Disposable implements IToolImpl {
 				disclaimer = new MarkdownString(`$(${Codicon.info.id}) ` + localize('runInTerminal.promptInjectionDisclaimer', 'Web content may contain malicious code or attempt prompt injection attacks.'), { supportThemeIcons: true });
 			}
 
-			let customActions: IToolConfirmationAction[] | undefined;
+			let customActions: ToolConfirmationAction[] | undefined;
 			if (!isAutoApproved) {
-				customActions = this._generateAutoApproveActions(args.command, subCommands, { subCommandResults, commandLineResult });
+				customActions = this._generateAutoApproveActions(actualCommand, subCommands, { subCommandResults, commandLineResult });
 			}
 
 			confirmationMessages = isAutoApproved ? undefined : {
@@ -880,8 +881,8 @@ export class RunInTerminalTool extends Disposable implements IToolImpl {
 		});
 	}
 
-	private _generateAutoApproveActions(commandLine: string, subCommands: string[], autoApproveResult: { subCommandResults: ICommandApprovalResultWithReason[]; commandLineResult: ICommandApprovalResultWithReason }): IToolConfirmationAction[] {
-		const actions: IToolConfirmationAction[] = [];
+	private _generateAutoApproveActions(commandLine: string, subCommands: string[], autoApproveResult: { subCommandResults: ICommandApprovalResultWithReason[]; commandLineResult: ICommandApprovalResultWithReason }): ToolConfirmationAction[] {
+		const actions: ToolConfirmationAction[] = [];
 
 		// We shouldn't offer configuring rules for commands that are explicitly denied since it
 		// wouldn't get auto approved with a new rule
@@ -920,9 +921,10 @@ export class RunInTerminalTool extends Disposable implements IToolImpl {
 			// Allow exact command line, don't do this if it's just the first sub-command's first
 			// word
 			if (subCommandsFirstWordOnly[0] !== commandLine) {
+				const truncatedCommandLine = commandLine.length > 40 ? commandLine.substring(0, 40) + '\u2026' : commandLine;
 				actions.push({
 					// Add an extra & since it's treated as a mnemonic
-					label: localize('autoApprove.exactCommand', 'Always Allow Full Command Line: {0}', commandLine.replaceAll('&&', '&&&')),
+					label: localize('autoApprove.exactCommand', 'Always Allow Full Command Line: {0}', truncatedCommandLine.replaceAll('&&', '&&&')),
 					tooltip: localize('autoApprove.exactCommandTooltip', 'Always allow this exact command to run without confirmation'),
 					data: {
 						type: 'newRule',
@@ -936,6 +938,10 @@ export class RunInTerminalTool extends Disposable implements IToolImpl {
 					} satisfies TerminalNewAutoApproveButtonData
 				});
 			}
+		}
+
+		if (actions.length > 0) {
+			actions.push(new Separator());
 		}
 
 		// Always show configure option
